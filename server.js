@@ -1,12 +1,12 @@
 require("dotenv").config();
 
-import express, { json } from "express";
-import { createServer } from "http";
-import { Server } from "socket.io";
-import cors from "cors";
+const express = require("express");
+const http = require("http");
+const { Server } = require("socket.io");
+const cors = require("cors");
 
 const app = express();
-const server = createServer(app);
+const server = http.createServer(app);
 
 /*
 ========================
@@ -30,7 +30,7 @@ app.use(
   })
 );
 
-app.use(json());
+app.use(express.json());
 
 /*
 ========================
