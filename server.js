@@ -1,95 +1,166 @@
+require("dotenv").config();
+
 const express = require("express");
 const http = require("http");
-const socketIO = require("socket.io");
+const { Server } = require("socket.io");
 const cors = require("cors");
 
 const app = express();
 const server = http.createServer(app);
 
-// Enable CORS for Socket.io
-const io = socketIO(server, {
+/*
+========================
+CONFIG
+========================
+*/
+
+const PORT = process.env.PORT || 3001;
+const CLIENT_URL = process.env.CLIENT_URL || "http://localhost:3000";
+
+/*
+========================
+MIDDLEWARE
+========================
+*/
+
+app.use(
+  cors({
+    origin: CLIENT_URL,
+    credentials: true,
+  })
+);
+
+app.use(express.json());
+
+/*
+========================
+SOCKET.IO SETUP
+========================
+*/
+
+const io = new Server(server, {
   cors: {
-    origin: process.env.CLIENT_URL || "http://localhost:3000",
+    origin: CLIENT_URL,
     methods: ["GET", "POST"],
     credentials: true,
   },
   transports: ["websocket", "polling"],
 });
 
-// Middleware
-app.use(cors());
-app.use(express.json());
+/*
+========================
+STATE
+========================
+*/
 
-// Store active typing users
 const typingUsers = new Map();
 
-// Health check endpoint
-app.get("/health", (req, res) => {
-  res.json({ status: "Socket.io server is running" });
+/*
+========================
+ROUTES
+========================
+*/
+
+app.get("/", (req, res) => {
+  res.send("Socket.io server running 🚀");
 });
 
-// Socket.io event handlers
+app.get("/health", (req, res) => {
+  res.json({
+    status: "ok",
+    socketConnections: io.engine.clientsCount,
+  });
+});
+
+/*
+========================
+SOCKET EVENTS
+========================
+*/
+
 io.on("connection", (socket) => {
-  console.log(`✓ User connected: ${socket.id}`);
+  console.log(`✅ Connected: ${socket.id}`);
 
-  // Patient form events
+  /*
+  ========================
+  NEW PATIENT
+  ========================
+  */
+
   socket.on("new-patient", (patient) => {
-    console.log(`📝 Patient submitted:`, patient.id);
+    console.log("📝 New patient:", patient);
 
-    // Broadcast to all staff users
     io.emit("patient-added", {
       ...patient,
-      timestamp: new Date(patient.timestamp),
+      timestamp: new Date(),
     });
   });
 
-  // Typing indicator - patient started typing
-  socket.on("patient-typing", (data) => {
-    const { patientId } = data;
+  /*
+  ========================
+  PATIENT TYPING
+  ========================
+  */
+
+  socket.on("patient-typing", ({ patientId }) => {
     typingUsers.set(patientId, {
       socketId: socket.id,
       timestamp: Date.now(),
     });
 
-    console.log(`⌨️  Patient typing: ${patientId}`);
-
-    // Broadcast typing event to all staff
     io.emit("patient-typing", { patientId });
   });
 
-  // Typing indicator - patient stopped typing
-  socket.on("patient-stopped-typing", (data) => {
-    const { patientId } = data;
+  /*
+  ========================
+  STOP TYPING
+  ========================
+  */
+
+  socket.on("patient-stopped-typing", ({ patientId }) => {
     typingUsers.delete(patientId);
 
-    console.log(`✋ Patient stopped typing: ${patientId}`);
-
-    // Broadcast stopped typing event to all staff
     io.emit("patient-stopped-typing", { patientId });
   });
 
-  // Handle disconnect
-  socket.on("disconnect", () => {
-    console.log(`✗ User disconnected: ${socket.id}`);
+  /*
+  ========================
+  DISCONNECT
+  ========================
+  */
 
-    // Clean up typing users for this socket
+  socket.on("disconnect", () => {
+    console.log(`❌ Disconnected: ${socket.id}`);
+
     for (const [patientId, user] of typingUsers.entries()) {
       if (user.socketId === socket.id) {
         typingUsers.delete(patientId);
+
         io.emit("patient-stopped-typing", { patientId });
       }
     }
   });
 
-  // Error handling
-  socket.on("error", (error) => {
-    console.error(`Socket error (${socket.id}):`, error);
+  /*
+  ========================
+  ERROR
+  ========================
+  */
+
+  socket.on("error", (err) => {
+    console.error("Socket error:", err);
   });
 });
 
-// Periodic cleanup of stale typing indicators (older than 5 seconds)
+/*
+========================
+CLEANUP STALE TYPING
+========================
+*/
+
 setInterval(() => {
   const now = Date.now();
+
   for (const [patientId, user] of typingUsers.entries()) {
     if (now - user.timestamp > 5000) {
       typingUsers.delete(patientId);
@@ -98,26 +169,31 @@ setInterval(() => {
   }
 }, 2000);
 
-// Start server
-const PORT = process.env.PORT || 3001;
+/*
+========================
+START SERVER
+========================
+*/
+
 server.listen(PORT, () => {
-  console.log(`\n🚀 Socket.io server running on http://localhost:${PORT}`);
-  console.log(`📊 Listening for real-time patient events...\n`);
+  console.log(`🚀 Server running on port ${PORT}`);
+  console.log(`🌍 Allowed client: ${CLIENT_URL}`);
 });
 
-// Graceful shutdown
-process.on("SIGTERM", () => {
-  console.log("SIGTERM signal received: closing HTTP server");
-  server.close(() => {
-    console.log("HTTP server closed");
-    process.exit(0);
-  });
-});
+/*
+========================
+GRACEFUL SHUTDOWN
+========================
+*/
 
-process.on("SIGINT", () => {
-  console.log("SIGINT signal received: closing HTTP server");
+const shutdown = () => {
+  console.log("Shutting down server...");
+
   server.close(() => {
-    console.log("HTTP server closed");
+    console.log("Server closed");
     process.exit(0);
   });
-});
+};
+
+process.on("SIGTERM", shutdown);
+process.on("SIGINT", shutdown);
